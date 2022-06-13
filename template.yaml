@@ -1,0 +1,547 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: "Infraestrutura do data lake da refera"
+Parameters:
+  EnvironmentType:
+    Type: String
+    Default: prd
+    AllowedValues:
+      - dev
+      - hml
+      - prd
+    Description: Entre com dev, hml ou prd. Default dev.
+  GlueDatabaseRefName:
+    Type: String
+    Default: "refera_datalake_ref"
+    AllowedValues:
+      - "refera_datalake_ref"
+      - "refera_datalake_dev_ref"
+      - "refera_datalake_hml_ref"
+  GlueDatabaseTrustedEcommerceName:
+    Type: String
+    Default: "compasso_datalake_trusted_ecommerce"
+    AllowedValues:
+      - "compasso_datalake_trusted_ecommerce"
+      - "compasso_datalake_dev_trusted_ecommerce"
+      - "compasso_datalake_hml_trusted_ecommerce"
+    Description: Nome do banco de dados da camada trusted ecommerce que será criado em cada ambiente.
+    Description: Caminho do local onde as queries do Athena serão armazenadas
+  S3OutputLocationEC:
+    Type: String
+    Default: "s3://compasso-datalake-prd/EC/"
+    AllowedValues:
+      - "s3://compasso-datalake-prd/EC/"
+      - "s3://compasso-datalake-hml/EC/"
+      - "s3://compasso-datalake-dev/EC/"
+  EC2GatewayImageId:
+    Type: String
+    Default: "<>"
+    Description: ID Da Imagem EC2 com as configurações do Gateway e o acesso ODBC da Athena para o Power BI Service
+  EC2KeyName:
+    Type: String
+    Default: "EC2GatewayPBI"
+    Description: Key Name para configurar em cada ambiente a variável par de chaves da EC2 para o Power BI Service
+  EC2GatewayTypeEc2:
+    Type: String
+    Default: "t3.medium"
+    Description: Tipo da EC2 com as configurações do Gateway e o acesso ODBC da Athena para o Power BI Service
+  EC2GatewayClientID:
+    Type: String
+    Default: "<>"
+    Description: Client ID do App de autenticação
+  EC2GatewayClientSecret:
+    Type: String
+    Default: "<>"
+    Description: Secret ID do App de autenticação
+  EC2GatewayUsername:
+    Type: String
+    Default: "svc.datalake.prd@refera.com.br"
+    Description: Username do usuário programático
+  EC2GatewayPassword:
+    Type: String
+    Default: "<>"
+    Description: Password do usuário programático
+Resources:
+  # Criação do database da camada REF
+  DatabaseRef:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref "AWS::AccountId"
+      DatabaseInput:
+        Description: "Disponibilização para acesso a camada REF, criando agregações e joins a partir da camada TRUSTED"
+        Name: !Ref GlueDatabaseRefName
+        LocationUri: !Join ["", ["s3://refera-datalake-", !Ref EnvironmentType, "/REF"]]
+
+  # Criação do database da camada TRUSTED
+  DatabaseTrustedIntranet:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref "AWS::AccountId"
+      DatabaseInput:
+        Description: "Disponibilização para acesso a camada TRUSTED, unificando a camada raw da intranet"
+        Name: !Ref GlueDatabaseTrustedIntranetName
+        LocationUri: !Join ["", ["s3://refera-datalake-", !Ref EnvironmentType, "/TRUSTED/ECOMMERCE"]]
+
+  # Criação do database do Ecommerce
+  DatabaseTrustedEcommerce:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref "AWS::AccountId"
+      DatabaseInput:
+        Description: "Disponibilização para acesso a camada TRUSTED, unificando a camada raw de Ecommerce"
+        Name: !Ref GlueDatabaseTrustedEcommerceName
+        LocationUri: !Join ["", ["s3://refera-datalake-", !Ref EnvironmentType, "/TRUSTED/ECOMMERCE"]]
+
+  # Criação do Bucket
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+      BucketName: !Join ["", ["refera-datalake-", !Ref EnvironmentType]]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # Criação da Layer
+  PandasLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "${AWS::StackName}-PandasLayer"
+      Description: "Pandas e AWS Data Wrangler"
+      LicenseInfo: MIT
+      ContentUri: layers/Pandas
+      CompatibleRuntimes:
+        - python3.7
+    Metadata:
+      BuildMethod: makefile
+
+  # Criação da Layer
+  Office365Layer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "${AWS::StackName}-Office365Layer"
+      Description: "Office 365"
+      LicenseInfo: MIT
+      ContentUri: layers/Office365
+      CompatibleRuntimes:
+        - python3.7
+    Metadata:
+      BuildMethod: makefile
+
+  # Criação da função para as lambdas
+  RoleLambdas:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-RoleLambda"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: "/service-role/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSStepFunctionsFullAccess
+        - arn:aws:iam::aws:policy/AWSLakeFormationDataAdmin
+        - arn:aws:iam::aws:policy/AmazonAthenaFullAccess
+        - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+        - arn:aws:iam::aws:policy/CloudWatchEventsFullAccess
+        - arn:aws:iam::aws:policy/AmazonAPIGatewayInvokeFullAccess
+
+  RoleLambdasIntranet:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-RoleLambdasIntranet"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: "/service-role/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSStepFunctionsFullAccess
+        - arn:aws:iam::aws:policy/AWSLakeFormationDataAdmin
+        - arn:aws:iam::aws:policy/AmazonAthenaFullAccess
+        - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+      Policies:
+        - PolicyName: !Sub "${AWS::StackName}-PolicyLambda-RoleLambdasIntranet"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource:
+                  - !GetAtt StartStepFunctionsRef.Arn
+
+  RoleLambdasRef:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-RoleLambdasRef"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: "/service-role/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSStepFunctionsFullAccess
+        - arn:aws:iam::aws:policy/AWSLakeFormationDataAdmin
+        - arn:aws:iam::aws:policy/AmazonAthenaFullAccess
+        - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+      Policies:
+        - PolicyName: !Sub "${AWS::StackName}-PolicyLambda-RoleLambdasRef"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource:
+                  - !GetAtt UpdatePowerBiService.Arn
+
+  RoleLambdaPowerBiDeploy:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-RoleLambdaPowerBiDeploy"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: "/service-role/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2FullAccess
+        - arn:aws:iam::aws:policy/IAMFullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # Concessão de permissão do database REF para role lambda
+  GrantDatabaseRefRoleLambda:
+    Type: AWS::LakeFormation::Permissions
+    Properties:
+      DataLakePrincipal:
+        DataLakePrincipalIdentifier: !GetAtt RoleLambdas.Arn
+      Permissions:
+        - CREATE_TABLE
+        - ALTER
+        - DROP
+        - DESCRIBE
+      Resource:
+        DatabaseResource:
+          Name: !Ref DatabaseRef
+
+  # Concessão de permissão do database TRUSTED Ecommerce para role lambda
+  GrantDatabaseTrustedEcommerceRoleLambda:
+    Type: AWS::LakeFormation::Permissions
+    Properties:
+      DataLakePrincipal:
+        DataLakePrincipalIdentifier: !GetAtt RoleLambdas.Arn
+      Permissions:
+        - CREATE_TABLE
+        - ALTER
+        - DROP
+        - DESCRIBE
+      Resource:
+        DatabaseResource:
+          Name: !Ref DatabaseTrustedEcommerce
+
+  # Criação das Lambdas
+  TrustedEcommerceFull:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-TrustedEcommerceFull"
+      Description: "Função lambda que processa o arquivo csv referente ao Ecommerce."
+      CodeUri: lambdas/Trusted/TrustedEcommerceFull
+      Handler: trusted_oneone_full.lambda_handler
+      Runtime: python3.7
+      MemorySize: 256
+      Timeout: 900
+      Layers:
+        - !Ref PandasLayer
+      Environment:
+        Variables:
+          LOG_LEVEL: DEBUG
+      Role: !GetAtt RoleLambdas.Arn 
+
+  IngestaoEcommerce:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-IngestaoEcommerce"
+      Description: "Função lambda que realiza a ingestão do arquivo de Ecommerce do repositorio local."
+      CodeUri: lambdas/Ingestao/IngestaoEcommerce
+      Handler: ingestao_ecommerce.lambda_handler
+      Runtime: python3.7
+      MemorySize: 256
+      Timeout: 900
+      Layers:
+        - !Ref Office365Layer
+      Environment:
+        Variables:
+          LOG_LEVEL: DEBUG
+          NAME_BUCKET: !Ref S3Bucket
+          NAME_REGION: !Sub "${AWS::Region}"
+      Role: !GetAtt RoleLambdas.Arn 
+    
+  RefFull:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-RefFull"
+      Description: "Função lambda que processa a carga das tabelas completas (full) da camada ref."
+      CodeUri: lambdas/Ref/RefFull
+      Handler: ref_full.lambda_handler
+      Runtime: python3.7
+      MemorySize: 896
+      Timeout: 900
+      Layers:
+        - !Ref PandasLayer
+      Environment:
+        Variables:
+          LOG_LEVEL: DEBUG
+      Role: !GetAtt RoleLambdas.Arn
+
+  RefFullPartitioned:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-RefFullPartitioned"
+      Description: "Função lambda que processa a carga das tabelas completas e particionadas (full-partitioned) da camada ref."
+      CodeUri: lambdas/Ref/RefFullPartitioned
+      Handler: ref_partitioned.lambda_handler
+      Runtime: python3.7
+      MemorySize: 896
+      Timeout: 900
+      Layers:
+        - !Ref PandasLayer
+      Environment:
+        Variables:
+          LOG_LEVEL: DEBUG
+      Role: !GetAtt RoleLambdas.Arn
+
+  StartStepFunctionsTrusted:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-StartStepFunctionsTrusted"
+      Description: "Função lambda responsável pela execução da máquina de estados da camada trusted (state_machine_trusted), executa por meio de gatilhos e então direciona os dados para suas devidas funções onde serão processados."
+      CodeUri: lambdas/StartStepFunctionsTrusted
+      Handler: start_step_functions_trusted.lambda_handler
+      Runtime: python3.7
+      MemorySize: 512
+      Timeout: 900
+      Layers:
+        - !Ref PandasLayer
+      Environment:
+        Variables:
+          LOG_LEVEL: DEBUG
+          STATE_MACHINE_TRUSTED: !GetAtt StateMachineTrusted.Arn
+          STATE_MACHINE_REF: !GetAtt StateMachineRef.Arn
+          GLUE_DB_TRUSTED_ECOMMERCE: !Ref DatabaseTrustedEcommerce
+      Role: !GetAtt RoleLambdasIntranet.Arn
+      Events:
+        BucketEventS3Ecommerce:
+          Type: S3
+          Properties:
+            Bucket:
+              Ref: S3Bucket
+            Events:
+              - "s3:ObjectCreated:*"
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: RAW/ECOMMERCE/
+                  - Name: suffix
+                    Value: .parquet      
+      EventInvokeConfig:
+        MaximumEventAgeInSeconds: 60
+        MaximumRetryAttempts: 1
+        DestinationConfig:
+          OnSuccess:
+            Type: Lambda
+            Destination: !GetAtt StartStepFunctionsRef.Arn
+
+  StartStepFunctionsRef:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-StartStepFunctionsRef"
+      Description: "Função lambda que serve para preparar parâmetros e iniciar a StepFunctions da REF"
+      CodeUri: lambdas/StartStepFunctionsRef
+      Handler: start_step_functions_ref.lambda_handler
+      Runtime: python3.7
+      MemorySize: 512
+      Timeout: 900
+      Layers:
+        - !Ref PandasLayer
+      Environment:
+        Variables:
+          LOG_LEVEL: DEBUG
+          STATE_MACHINE_TRUSTED: !GetAtt StateMachineTrusted.Arn
+          STATE_MACHINE_REF: !GetAtt StateMachineRef.Arn
+          GLUE_DB_TRUSTED_ECOMMERCE: !Ref DatabaseTrustedEcommerce
+          GLUE_DB_REF: !Ref DatabaseRef
+          WORKGROUP: !Ref WorkGroup
+      Role: !GetAtt RoleLambdasRef.Arn
+      EventInvokeConfig:
+        MaximumEventAgeInSeconds: 60
+        MaximumRetryAttempts: 1
+        DestinationConfig:
+          OnSuccess:
+            Type: Lambda
+            Destination: !GetAtt UpdatePowerBiService.Arn
+
+  UpdatePowerBiService:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-UpdatePowerBiService"
+      Description: "Função que atualiza os dashboards no Power BI Service"
+      CodeUri: lambdas/UpdatePowerBiService
+      Handler: main.lambda_handler
+      Runtime: python3.7
+      MemorySize: 896
+      Timeout: 900
+      Environment:
+        Variables:
+          LOG_LEVEL: DEBUG
+          EC2_IMAGE_ID: !Ref EC2GatewayImageId
+          EC2_TYPE: !Ref EC2GatewayTypeEc2
+          EC2_KEY_NAME: !Ref EC2KeyName
+          PWB_CLIENT_ID: !Ref EC2GatewayClientID
+          PWB_CLIENT_SECRET: !Ref EC2GatewayClientSecret
+          PWB_USERNAME: !Ref EC2GatewayUsername
+          PWB_PASSWORD: !Ref EC2GatewayPassword
+      Role: !GetAtt RoleLambdaPowerBiDeploy.Arn
+
+  # Criação das funções para as StepFunctions
+  RoleStateMachineTrusted:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-RoleStateMachineTrusted"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "states.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: !Sub "${AWS::StackName}-PolicyLambda-RoleStateMachineTrusted"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "xray:PutTraceSegments"
+                  - "xray:PutTelemetryRecords"
+                  - "xray:GetSamplingRules"
+                  - "xray:GetSamplingTargets"
+                Resource: "*"
+              - Effect: "Allow"
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource:
+                  - !GetAtt TrustedEcommerceFull.Arn
+
+  RoleStateMachineRef:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-RoleStateMachineRef"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "states.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: !Sub "${AWS::StackName}-PolicyLambda-RoleStateMachineRef"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "xray:PutTraceSegments"
+                  - "xray:PutTelemetryRecords"
+                  - "xray:GetSamplingRules"
+                  - "xray:GetSamplingTargets"
+                Resource: "*"
+              - Effect: "Allow"
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource:
+                  - !GetAtt RefFull.Arn
+                  - !GetAtt RefFullPartitioned.Arn
+
+  # Criação das StepFunctions
+  StateMachineTrusted:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub "${AWS::StackName}-StateMachineTrusted"
+      Role: !GetAtt RoleStateMachineTrusted.Arn
+      DefinitionUri: stepfunctions/state_machine_trusted.asl.json
+      DefinitionSubstitutions:
+        arnTrustedEcommerceFull: !GetAtt TrustedEcommerceFull.Arn
+
+  StateMachineRef:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub "${AWS::StackName}-StateMachineRef"
+      Role: !GetAtt RoleStateMachineRef.Arn
+      DefinitionUri: stepfunctions/state_machine_ref.asl.json
+      DefinitionSubstitutions:
+        arnRefFull: !GetAtt RefFull.Arn
+        arnRefFullPartitioned: !GetAtt RefFullPartitioned.Arn
+
+  # Criação do WorkGroup responsável por armazenar as queries do Athena
+  WorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-WorkGroup"
+      Description: Usado para armazenar as queries do Athena
+      State: ENABLED
+      Tags:
+        - Key: "Compasso"
+          Value: "MXDataLake"
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: false
+        PublishCloudWatchMetricsEnabled: true
+        ResultConfiguration:
+          OutputLocation: !Ref S3OutputLocation
+
+  # Criação das queries utilizadas para criação da camada refinada
+  fAlocacoes:
+    Type: AWS::Athena::NamedQuery
+    Properties:
+      Database: !Ref DatabaseTrustedEcommerce
+      Description: "Tabela referente às alocações de cada colaborador em projetos de clientes da Compasso UOL, como projetos internos da Compasso UOL."
+      Name: "f_alocacoes"
+      QueryString: !Sub >
+                    SELECT * FROM custormers LIMIT 10;
+      WorkGroup: !Ref WorkGroup

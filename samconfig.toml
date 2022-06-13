@@ -1,0 +1,37 @@
+version=0.1
+
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "ReferaDatalake"
+s3_bucket = "refera-datalake-prd-artifacts"
+s3_prefix = "template"
+region = "us-east-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_AUTO_EXPAND CAPABILITY_NAMED_IAM CAPABILITY_IAM"
+parameter_overrides = "EnvironmentType=prd GlueDatabaseTrustedEcommerceName=refera_datalake_prd_ecommerce S3OutputLocation=s3://refera-datalake-prd/tmp/ S3OutputLocationEC=s3://refera-datalake-prd/EC/ EC2GatewayImageId=<id> EC2GatewayType=t3.medium EC2GatewayClientID=<id> EC2GatewayClientSecret=<secret> EC2GatewayUsername=<endereco gateway> EC2GatewayPassword=<passwd> EC2KeyName=EC2GatewayPBI"
+tags = "Refera=Datalake"
+
+[dev]
+[dev.deploy]
+[dev.deploy.parameters]
+stack_name = "ReferaDatalakeDev"
+s3_bucket = "refera-datalake-dev-artifacts"
+s3_prefix = "template"
+region = "us-east-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_AUTO_EXPAND CAPABILITY_NAMED_IAM CAPABILITY_IAM"
+parameter_overrides = "EnvironmentType=dev GlueDatabaseTrustedEcommerceName=refera_datalake_dev_trusted_ecommerce S3OutputLocation=s3://refera-datalake-dev/tmp/ S3OutputLocationEC=s3://refera-datalake-dev/EC/ EC2GatewayImageId=<id> EC2GatewayType=t3.medium EC2GatewayClientID=<id> EC2GatewayClientSecret=<secret> EC2GatewayUsername=svc.datalake@refera.com.br EC2GatewayPassword=<passwd>"
+tags = "Refera=Datalake"
+
+[hml]
+[hml.deploy]
+[hml.deploy.parameters]
+stack_name = "ReferaDatalakeHml"
+s3_bucket = "refera-datalake-hml-artifacts"
+s3_prefix = "template"
+region = "us-east-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_AUTO_EXPAND CAPABILITY_NAMED_IAM CAPABILITY_IAM"
+parameter_overrides = "EnvironmentType=hml GlueDatabaseTrustedEcommerceName=refera_datalake_hml_trusted_ecommerce S3OutputLocation=s3://refera-datalake-hml/tmp/ S3OutputLocationEC=s3://refera-datalake-hml/EC/ EC2GatewayImageId=<id> EC2GatewayType=t3.medium EC2GatewayClientID=<id> EC2GatewayClientSecret=<secret> EC2GatewayUsername=svc.datalake@refera.com.br EC2GatewayPassword=<passwd>"
+tags = "Refera=Datalake"
